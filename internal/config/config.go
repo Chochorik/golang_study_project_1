@@ -10,6 +10,7 @@ import (
 
 type Config struct {
 	DatabaseUrl string
+	HTTPAddr    string
 }
 
 func Load() (*Config, error) {
@@ -29,7 +30,10 @@ func Load() (*Config, error) {
 		Path:     name,
 		RawQuery: "sslmode=disable",
 	}
-	return &Config{DatabaseUrl: u.String()}, nil
+	return &Config{
+		DatabaseUrl: u.String(),
+		HTTPAddr:    getenv("HTTP_ADDR", ":8080"),
+	}, nil
 }
 
 func getenv(key, def string) string {
