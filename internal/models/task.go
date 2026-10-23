@@ -16,17 +16,19 @@ const (
 )
 
 type Task struct {
-	Id             int          `json:"id"`
-	Title          string       `json:"title"`
-	Description    string       `json:"description"`
-	IsDone         bool         `json:"is_done"`
-	DoneAt         *time.Time   `json:"done_at"`
-	NotifyStatus   NotifyStatus `json:"notify_status"`
-	NotifyAttempts int          `json:"notify_attempts"`
-	NotifiedAt     *time.Time   `json:"notified_at"`
-	CreatedAt      time.Time    `json:"created_at"`
-	UpdatedAt      time.Time    `json:"updated_at"`
+	Id             int          `json:"id"              gorm:"column:id;primaryKey"`
+	Title          string       `json:"title"           gorm:"column:title"`
+	Description    string       `json:"description"     gorm:"column:description"`
+	IsDone         bool         `json:"is_done"         gorm:"column:is_done"`
+	DoneAt         *time.Time   `json:"done_at"         gorm:"column:done_at"`
+	NotifyStatus   NotifyStatus `json:"notify_status"   gorm:"column:notify_status"`
+	NotifyAttempts int          `json:"notify_attempts" gorm:"column:notify_attempts"`
+	NotifiedAt     *time.Time   `json:"notified_at"     gorm:"column:notified_at"`
+	CreatedAt      time.Time    `json:"created_at"      gorm:"column:created_at"`
+	UpdatedAt      time.Time    `json:"updated_at"      gorm:"column:updated_at"`
 }
+
+func (Task) TableName() string { return "tasks" }
 
 var ErrTaskTitleRequired = errors.New("title is required")
 var ErrTaskNotFound = errors.New("task not found")
