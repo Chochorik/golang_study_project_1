@@ -30,13 +30,16 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	pool, err := postgres.NewPool(ctx, cfg.DatabaseUrl)
+	db, err := postgres.NewDB(ctx, cfg.DatabaseUrl)
 	if err != nil {
 		return err
 	}
-	defer pool.Close()
 
-	repo := postgres.NewTaskRepository(pool)
+	if sqlDB, err := db.DB(); err == nil {
+		defer sqlDB.Close()
+	}
+
+	repo := postgres.NewTaskRepository(db)
 	srv := api.NewServer(cfg.HTTPAddr, repo)
 
 	errChan := make(chan error, 1)

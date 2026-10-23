@@ -4,45 +4,23 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"todo-service/internal/models"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+
+	"todo-service/internal/models"
 )
 
-const taskColumns = `id, title, description, is_done, done_at, notify_status, notify_attempts, notified_at, created_at, updated_at`
-
 type TaskRepository struct {
-	pool *pgxpool.Pool
+	db *gorm.DB
 }
 
-func NewTaskRepository(pool *pgxpool.Pool) *TaskRepository {
-	return &TaskRepository{pool: pool}
-}
-
-func ScanTask(row pgx.Row, t *models.Task) error {
-	return row.Scan(
-		&t.Id,
-		&t.Title,
-		&t.Description,
-		&t.IsDone,
-		&t.DoneAt,
-		&t.NotifyStatus,
-		&t.NotifyAttempts,
-		&t.NotifiedAt,
-		&t.CreatedAt,
-		&t.UpdatedAt,
-	)
+func NewTaskRepository(db *gorm.DB) *TaskRepository {
+	return &TaskRepository{db: db}
 }
 
 func (r *TaskRepository) Create(ctx context.Context, t *models.Task) error {
-	const q = `INSERT INTO tasks (title, description, done_at)
-		VALUES ($1, $2, $3)
-		RETURNING ` + taskColumns
-
-	row := r.pool.QueryRow(ctx, q, t.Title, t.Description, t.DoneAt)
-
-	if err := ScanTask(row, t); err != nil {
+	if err := r.db.WithContext(ctx).Create(t).Error; err != nil {
 		return fmt.Errorf("create task: %w", err)
 	}
 
@@ -50,14 +28,11 @@ func (r *TaskRepository) Create(ctx context.Context, t *models.Task) error {
 }
 
 func (r *TaskRepository) GetById(ctx context.Context, id int64) (*models.Task, error) {
-	const q = `SELECT ` + taskColumns + ` FROM tasks WHERE id = $1`
-
 	var t models.Task
 
-	row := r.pool.QueryRow(ctx, q, id)
-
-	if err := ScanTask(row, &t); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+	err := r.db.WithContext(ctx).First(&t, "id = ?", id).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, models.ErrTaskNotFound
 		}
 
@@ -68,30 +43,14 @@ func (r *TaskRepository) GetById(ctx context.Context, id int64) (*models.Task, e
 }
 
 func (r *TaskRepository) List(ctx context.Context, isDone *bool) ([]models.Task, error) {
-	const q = `SELECT ` + taskColumns + ` FROM tasks
-		WHERE ($1::boolean IS NULL OR is_done = $1)
-		ORDER BY id`
-
-	rows, err := r.pool.Query(ctx, q, isDone)
-	if err != nil {
-		return nil, fmt.Errorf("list tasks: %w", err)
-	}
-
-	defer rows.Close()
-
 	tasks := make([]models.Task, 0)
 
-	for rows.Next() {
-		var t models.Task
-
-		if err := ScanTask(rows, &t); err != nil {
-			return nil, fmt.Errorf("scan task: %w", err)
-		}
-
-		tasks = append(tasks, t)
+	q := r.db.WithContext(ctx).Order("id")
+	if isDone != nil {
+		q = q.Where("is_done = ?", *isDone)
 	}
 
-	if err := rows.Err(); err != nil {
+	if err := q.Find(&tasks).Error; err != nil {
 		return nil, fmt.Errorf("list tasks: %w", err)
 	}
 
@@ -99,39 +58,54 @@ func (r *TaskRepository) List(ctx context.Context, isDone *bool) ([]models.Task,
 }
 
 func (r *TaskRepository) Update(ctx context.Context, id int64, upd models.TaskUpdate) (*models.Task, error) {
-	const q = `UPDATE tasks SET
-		title = COALESCE($2, title),
-		description = COALESCE($3, description),
-		is_done = COALESCE($4, is_done),
-		done_at = COALESCE($5, done_at),
-		updated_at = now()
-		WHERE id = $1
-		RETURNING ` + taskColumns
+	fields := map[string]any{}
+
+	if upd.Title != nil {
+		fields["title"] = *upd.Title
+	}
+	if upd.Description != nil {
+		fields["description"] = *upd.Description
+	}
+	if upd.IsDone != nil {
+		fields["is_done"] = *upd.IsDone
+		if *upd.IsDone {
+			fields["done_at"] = gorm.Expr("COALESCE(done_at, now())")
+		} else {
+			fields["done_at"] = nil
+		}
+	}
+
+	if len(fields) == 0 {
+		return r.GetById(ctx, id)
+	}
 
 	var t models.Task
 
-	row := r.pool.QueryRow(ctx, q, id, upd.Title, upd.Description, upd.IsDone, upd.DoneAt)
+	res := r.db.WithContext(ctx).
+		Model(&t).
+		Clauses(clause.Returning{}).
+		Where("id = ?", id).
+		Updates(fields)
 
-	if err := ScanTask(row, &t); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, models.ErrTaskNotFound
-		}
+	if res.Error != nil {
+		return nil, fmt.Errorf("update task %d: %w", id, res.Error)
+	}
 
-		return nil, fmt.Errorf("update task %d: %w", id, err)
+	if res.RowsAffected == 0 {
+		return nil, models.ErrTaskNotFound
 	}
 
 	return &t, nil
 }
 
 func (r *TaskRepository) Delete(ctx context.Context, id int64) error {
-	const q = `DELETE FROM tasks WHERE id = $1`
+	res := r.db.WithContext(ctx).Delete(&models.Task{}, "id = ?", id)
 
-	tag, err := r.pool.Exec(ctx, q, id)
-	if err != nil {
-		return fmt.Errorf("delete task %d: %w", id, err)
+	if res.Error != nil {
+		return fmt.Errorf("delete task %d: %w", id, res.Error)
 	}
 
-	if tag.RowsAffected() == 0 {
+	if res.RowsAffected == 0 {
 		return models.ErrTaskNotFound
 	}
 
